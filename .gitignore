@@ -1,0 +1,7 @@
+.env
+__pycache__/
+*.pyc
+.venv/
+.claude/
+*.xlsx
+debug_out.txt
