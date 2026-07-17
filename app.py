@@ -415,6 +415,23 @@ def render_kakao_map(marker_data: list):
 
     html = f"""
     <div id="map" style="width:100%;height:600px;"></div>
+    <script>
+    // Streamlit의 iframe(srcdoc) 안에서는 카카오 SDK가 현재 페이지를 https로 인식하지 못해
+    // 지도 엔진 스크립트를 http://로 요청하다 브라우저에 차단되는 문제(Mixed Content)가 있다.
+    // 동적으로 추가되는 <script src="http://..."> 를 https로 강제 승격시켜 우회한다.
+    (function() {{
+        var d = Object.getOwnPropertyDescriptor(HTMLScriptElement.prototype, 'src');
+        Object.defineProperty(HTMLScriptElement.prototype, 'src', {{
+            set: function(v) {{
+                if (typeof v === 'string' && v.indexOf('http://') === 0) {{
+                    v = 'https://' + v.slice(7);
+                }}
+                d.set.call(this, v);
+            }},
+            get: d.get
+        }});
+    }})();
+    </script>
     <script src="https://dapi.kakao.com/v2/maps/sdk.js?appkey={KAKAO_API_KEY}&autoload=false"></script>
     <script>
     kakao.maps.load(function() {{
