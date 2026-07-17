@@ -26,9 +26,28 @@ MOLIT_API_KEY = os.getenv("MOLIT_API_KEY", "").strip()
 KAKAO_API_KEY = os.getenv("KAKAO_API_KEY", "").strip()         # JavaScript 키 (지도 표시용)
 KAKAO_REST_API_KEY = os.getenv("KAKAO_REST_API_KEY", "").strip()  # REST API 키 (주소→좌표 변환용)
 
-st.set_page_config(page_title="동욱's 갭메우기 레이더", layout="wide")
-st.title("🎯 동욱's 갭메우기 레이더 (v3.4 - 안정화 버전)")
-st.markdown("공공데이터 API 실거래가 기반 | 멀티 지역·기간 검색 + 카카오맵 + 엑셀 다운로드")
+st.set_page_config(page_title="동욱's 갭메우기 레이더", layout="wide", initial_sidebar_state="auto")
+
+# 상단 여백/제목 크기 축소 + 모바일에서 잘리지 않도록 기본 패딩 최소화
+st.markdown(
+    """
+    <style>
+    /* Streamlit 상단 고정 바(약 60px)에 안 가리도록 최소 여백만 확보 */
+    .block-container { padding-top: 3.6rem; padding-bottom: 1rem; }
+    @media (max-width: 640px) {
+        .block-container { padding-left: 0.8rem; padding-right: 0.8rem; }
+    }
+    </style>
+    <div style="display:flex;align-items:baseline;gap:0.5rem;flex-wrap:wrap;margin-bottom:0.1rem;">
+        <span style="font-size:1.4rem;font-weight:800;">🎯 동욱's 갭메우기 레이더</span>
+        <span style="font-size:0.8rem;color:#888;">v3.4</span>
+    </div>
+    <div style="font-size:0.82rem;color:#888;margin-bottom:0.6rem;">
+        공공데이터 API 실거래가 기반 | 멀티 지역·기간 검색 + 카카오맵 + 엑셀 다운로드
+    </div>
+    """,
+    unsafe_allow_html=True,
+)
 
 if not MOLIT_API_KEY or not KAKAO_API_KEY or not KAKAO_REST_API_KEY:
     st.error("🚨 `.env` 파일에 MOLIT_API_KEY / KAKAO_API_KEY / KAKAO_REST_API_KEY 값이 "
@@ -429,15 +448,24 @@ def build_popup_html(gu: str, dong: str, apt: str, addr: str, deals: pd.DataFram
     )
 
 
-def build_marker_label(apt: str, deals: pd.DataFrame) -> str:
-    """지도에 항상 보이는 짧은 라벨: 단지명 + 대표 면적 + 대표 매매가"""
-    short_apt = apt if len(apt) <= 7 else apt[:7] + "…"
+def build_marker_label(apt: str, deals: pd.DataFrame) -> dict:
+    """지도에 항상 보이는 세로형 말풍선용 데이터: 평당가 / 대표 매매가 / 대표 면적.
+
+    부동산 지도 서비스(네이버 등)에 익숙한 형태로 세로 2단 뱃지를 만든다 —
+    가로로 긴 한 줄 텍스트 대신 평당가(작게) + 매매가(굵게) + 면적(작게)로 쌓는다.
+    """
     if deals.empty:
-        return short_apt
+        return {"pyeong": "", "price": "-", "area": ""}
     grp = deals.groupby(deals["전용면적(㎡)"].round().astype(int))["거래금액(만원)"]
     # 거래건수가 가장 많은 평형을 대표값으로 사용
     rep_area, rep_series = max(grp, key=lambda t: len(t[1]))
-    return f"{short_apt} {rep_area}㎡ {_fmt_price(rep_series.mean())}"
+    rep_price = rep_series.mean()
+    pyeong_price = rep_price / rep_area * 3.3058  # 3.3㎡(1평)당 가격
+    return {
+        "pyeong": f"평 {pyeong_price / 10000:.1f}억" if pyeong_price >= 10000 else f"평 {pyeong_price:,.0f}만",
+        "price": _fmt_price(rep_price),
+        "area": f"{rep_area}㎡",
+    }
 
 
 def render_kakao_map(marker_data: list):
@@ -470,34 +498,91 @@ def render_kakao_map(marker_data: list):
         var map = new kakao.maps.Map(container, options);
         var markers = {markers_str};
         var bounds = new kakao.maps.LatLngBounds();
-        var openIw = null;
+        var openDetail = null;
 
         markers.forEach(function(m, idx) {{
             var pos = new kakao.maps.LatLng(m.lat, m.lng);
             bounds.extend(pos);
 
             // 핀 대신 단지명·대표면적·가격이 바로 보이는 라벨 뱃지
+            // 세로형 2단 말풍선: 위 - 평당가(작은 회색 알약), 아래 - 매매가(굵게)+면적, 꼬리표 포함
+            var accent = m.selected ? '#f5a623' : '#2f6fed';
             var badge = document.createElement('div');
-            badge.textContent = m.label;
             badge.style.cssText =
-                'padding:3px 7px;border-radius:6px;font-size:11px;font-weight:600;' +
-                'white-space:nowrap;cursor:pointer;box-shadow:0 1px 3px rgba(0,0,0,.3);' +
-                'border:1.5px solid ' + (m.selected ? '#f5a623' : '#4B7BEC') + ';' +
-                'background:' + (m.selected ? '#fff8e6' : '#ffffff') + ';color:#222;';
+                'display:flex;flex-direction:column;align-items:center;cursor:pointer;' +
+                'filter:drop-shadow(0 1px 2px rgba(0,0,0,.35));';
+
+            var pyeongEl = document.createElement('div');
+            pyeongEl.textContent = m.label.pyeong;
+            pyeongEl.style.cssText =
+                'font-size:9px;color:#666;background:#fff;border:1px solid #ddd;' +
+                'border-radius:8px;padding:0px 6px;margin-bottom:1px;white-space:nowrap;' +
+                (m.label.pyeong ? '' : 'display:none;');
+
+            var mainEl = document.createElement('div');
+            mainEl.style.cssText =
+                'display:flex;flex-direction:column;align-items:center;line-height:1.15;' +
+                'padding:3px 8px;border-radius:7px;white-space:nowrap;' +
+                'background:' + accent + ';color:#fff;';
+            var priceEl = document.createElement('div');
+            priceEl.textContent = m.label.price;
+            priceEl.style.cssText = 'font-size:12.5px;font-weight:800;';
+            var areaEl = document.createElement('div');
+            areaEl.textContent = m.label.area;
+            areaEl.style.cssText = 'font-size:9px;opacity:.9;';
+            mainEl.appendChild(priceEl);
+            mainEl.appendChild(areaEl);
+
+            var tailEl = document.createElement('div');
+            tailEl.style.cssText =
+                'width:0;height:0;border-left:5px solid transparent;border-right:5px solid transparent;' +
+                'border-top:6px solid ' + accent + ';margin-top:-1px;';
+
+            badge.appendChild(pyeongEl);
+            badge.appendChild(mainEl);
+            badge.appendChild(tailEl);
             badge.onmouseenter = function() {{ badge.style.zIndex = 20; }};
 
             var overlay = new kakao.maps.CustomOverlay({{
                 position: pos, content: badge, map: map,
-                yAnchor: 1.4, zIndex: m.selected ? 10 : 1
+                yAnchor: 1.0, zIndex: m.selected ? 10 : 1
             }});
 
-            var iw = new kakao.maps.InfoWindow({{ position: pos, content: m.html, removable: true }});
+            // 상세 팝업도 InfoWindow 대신 CustomOverlay로 만든다 — InfoWindow는
+            // zIndex를 지정할 수 없어 라벨 뱃지(zIndex 지정됨)보다 뒤로 깔리는
+            // 문제가 있었다. CustomOverlay는 zIndex를 크게 줘서 항상 맨 위에 뜨게 한다.
+            var detailWrap = document.createElement('div');
+            detailWrap.style.cssText =
+                'position:relative;background:#fff;border-radius:8px;' +
+                'box-shadow:0 2px 10px rgba(0,0,0,.35);';
+            var closeBtn = document.createElement('div');
+            closeBtn.textContent = '×';
+            closeBtn.style.cssText =
+                'position:absolute;top:2px;right:7px;cursor:pointer;' +
+                'font-size:16px;line-height:1;color:#999;font-weight:bold;';
+            var contentDiv = document.createElement('div');
+            contentDiv.innerHTML = m.html;
+            detailWrap.appendChild(closeBtn);
+            detailWrap.appendChild(contentDiv);
+
+            var detailOverlay = new kakao.maps.CustomOverlay({{
+                position: pos, content: detailWrap, map: null,
+                yAnchor: 1.15, zIndex: 999
+            }});
+            closeBtn.addEventListener('click', function(e) {{
+                e.stopPropagation();
+                detailOverlay.setMap(null);
+                if (openDetail === detailOverlay) openDetail = null;
+            }});
+
             badge.addEventListener('click', function() {{
-                if (openIw === iw) {{ iw.close(); openIw = null; }}
-                else {{
-                    if (openIw) {{ openIw.close(); }}
-                    iw.open(map);
-                    openIw = iw;
+                if (openDetail === detailOverlay) {{
+                    detailOverlay.setMap(null);
+                    openDetail = null;
+                }} else {{
+                    if (openDetail) openDetail.setMap(null);
+                    detailOverlay.setMap(map);
+                    openDetail = detailOverlay;
                 }}
             }});
         }});
@@ -725,6 +810,16 @@ DISPLAY_COLS = ["계약일", "자치구", "법정동", "아파트명", "전용�
 if filtered_df is not None:
     DISPLAY_COLS += [c for c in ["세대수", "준공연도", "건폐율(%)", "용적률(%)"] if c in filtered_df.columns]
 
+def naver_search_url(name: str) -> str:
+    """단지명 클릭 시 이동할 네이버 검색 링크. LinkColumn의 display_text 정규식이
+    'query=' 뒤 문자열을 그대로 잘라 보여주므로, URL 인코딩 없이 원문 그대로 붙인다."""
+    return f"https://search.naver.com/search.naver?query={name}"
+
+
+NAVER_LINK_CONFIG = {
+    "아파트명": st.column_config.LinkColumn("아파트명", display_text=r"query=(.+)$"),
+}
+
 NUM_COL_CONFIG = {
     "거래금액(만원)": st.column_config.NumberColumn(format="localized"),
     "전용면적(㎡)": st.column_config.NumberColumn(format="localized"),
@@ -766,9 +861,11 @@ with tab1:
         start_idx = (page_num - 1) * page_size
         page_df = sorted_df.iloc[start_idx:start_idx + page_size]
 
-        st.dataframe(page_df[DISPLAY_COLS], use_container_width=True, hide_index=True,
-                     column_config=NUM_COL_CONFIG)
-        st.caption(f"페이지 {page_num} / {total_pages} (전체 {len(sorted_df):,}건, 50건씩 표시)")
+        page_df_view = page_df[DISPLAY_COLS].copy()
+        page_df_view["아파트명"] = page_df_view["아파트명"].apply(naver_search_url)
+        st.dataframe(page_df_view, use_container_width=True, hide_index=True,
+                     column_config={**NUM_COL_CONFIG, **NAVER_LINK_CONFIG})
+        st.caption(f"페이지 {page_num} / {total_pages} (전체 {len(sorted_df):,}건, 50건씩 표시) · 아파트명 클릭 시 네이버 검색으로 이동")
 
         st.markdown("### 🏢 단지별 요약")
         summary_df = (
@@ -783,8 +880,10 @@ with tab1:
         )
         summary_df["평균가"] = summary_df["평균가"].round(0).astype(int)
         summary_df = summary_df.sort_values(by="거래건수", ascending=False)
-        st.dataframe(summary_df, use_container_width=True, hide_index=True,
-                     column_config=NUM_COL_CONFIG)
+        summary_df_view = summary_df.copy()
+        summary_df_view["아파트명"] = summary_df_view["아파트명"].apply(naver_search_url)
+        st.dataframe(summary_df_view, use_container_width=True, hide_index=True,
+                     column_config={**NUM_COL_CONFIG, **NAVER_LINK_CONFIG})
 
         st.markdown("### ⬇️ 엑셀 다운로드")
         d1, d2 = st.columns(2)
