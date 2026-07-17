@@ -210,8 +210,9 @@ def fetch_apt_list(gu_code: str):
         for item in items:
             code = (item.get("kaptCode") or "").strip()
             name = (item.get("kaptName") or "").strip()
+            dong = (item.get("as3") or "").strip()
             if code and name:
-                out.append((code, name, _norm_apt_name(name)))
+                out.append((code, name, _norm_apt_name(name), dong))
         total_count = int(body.get("totalCount") or 0)
         if page * 1000 >= total_count:
             break
@@ -277,59 +278,77 @@ def fetch_complex_info(kapt_code: str):
     return info
 
 
-def _match_kapt(apt_name: str, entries):
-    """실거래 아파트명과 공동주택 단지목록 매칭 고도화 (SequenceMatcher 활용)"""
+def _best_match(n: str, candidates):
+    """정규화된 이름 n과 candidates([(code, name, knorm), ...]) 중 최고 유사도 매칭"""
+    best_code, best_score = None, 0.0
+    for code, _, knorm in candidates:
+        if not knorm:
+            continue
+        score = SequenceMatcher(None, n, knorm).ratio()
+        if n in knorm or knorm in n:
+            score += 0.25
+        if score > best_score:
+            best_score, best_code = score, code
+    return best_code, best_score
+
+
+def _match_kapt(apt_name: str, dong: str, entries):
+    """실거래 아파트명+법정동과 공동주택 단지목록 매칭.
+
+    같은 이름(예: '중앙하이츠', '래미안')이 다른 동에도 흔히 존재하므로,
+    법정동이 같은 후보를 우선 사용하고, 동이 일치하는 후보가 없을 때만
+    자치구 전체로 넓히되 오매칭 방지를 위해 더 높은 기준을 요구한다.
+    """
     n = _norm_apt_name(apt_name)
     if not n:
         return None
-    
-    # 1단계: 완전 일치 우선 탐색
-    for code, _, knorm in entries:
+
+    same_dong = [(c, nm, kn) for c, nm, kn, d in entries if d == dong]
+    if same_dong:
+        for code, _, knorm in same_dong:
+            if n == knorm:
+                return code
+        code, score = _best_match(n, same_dong)
+        if score >= 0.55:
+            return code
+        return None  # 동은 맞는데 이름이 안 맞으면 엉뚱한 동 단지로 확대하지 않음
+
+    # 법정동 정보가 없거나(동명 표기 차이 등) 동일 동 후보가 없는 경우에만
+    # 자치구 전체로 확대 탐색 — 오매칭 위험이 크므로 기준을 훨씬 엄격하게.
+    all_entries = [(c, nm, kn) for c, nm, kn, d in entries]
+    for code, _, knorm in all_entries:
         if n == knorm:
             return code
-            
-    # 2단계: 유사도 기반 다중 분석 (시공사 브랜드 차이 등 방어)
-    best_code = None
-    best_score = 0.0
-    
-    for code, _, knorm in entries:
-        if not knorm:
-            continue
-        
-        score = SequenceMatcher(None, n, knorm).ratio()
-        
-        # 한쪽 명칭이 다른 쪽에 완전히 포함되는 경우 가중치 부여
-        if n in knorm or knorm in n:
-            score += 0.25
-            
-        if score > best_score:
-            best_score = score
-            best_code = code
-            
-    if best_score >= 0.65:
-        return best_code
+    code, score = _best_match(n, all_entries)
+    if score >= 0.85:
+        return code
     return None
 
 
 def attach_complex_info(df: pd.DataFrame) -> pd.DataFrame:
-    """세대수/준공연도/건폐율/용적률 컬럼 연동 및 병렬 스레딩 안정화"""
+    """세대수/준공연도/건폐율/용적률 컬럼 연동 및 병렬 스레딩 안정화.
+
+    동일 아파트명이 여러 법정동에 흔히 존재하므로 (자치구, 법정동, 아파트명)
+    3중키로 매칭·캐싱한다 — 이름만으로 키를 잡으면 다른 동의 동명 단지 정보가
+    섞여 세대수 등이 틀리게 표시되는 문제가 있었다.
+    """
     df = df.copy()
-    pairs = df[["자치구", "아파트명"]].drop_duplicates()
+    triples = df[["자치구", "법정동", "아파트명"]].drop_duplicates()
     results_map = {}
 
-    for gu in pairs["자치구"].unique():
+    for gu in triples["자치구"].unique():
         gu_code = LAWD_CD_DICT[gu]
         entries = fetch_apt_list(gu_code)
 
-        gu_pairs = pairs.loc[pairs["자치구"] == gu, "아파트명"].unique()
+        gu_triples = triples.loc[triples["자치구"] == gu, ["법정동", "아파트명"]].drop_duplicates()
         to_fetch = []
-        
-        for name in gu_pairs:
-            kapt_code = _match_kapt(name, entries)
+
+        for dong, name in gu_triples.itertuples(index=False):
+            kapt_code = _match_kapt(name, dong, entries)
             if kapt_code is None:
-                results_map[(gu, name)] = dict(CINFO_EMPTY)
+                results_map[(gu, dong, name)] = dict(CINFO_EMPTY)
             else:
-                to_fetch.append(((gu, name), kapt_code))
+                to_fetch.append(((gu, dong, name), kapt_code))
 
         if to_fetch:
             with ThreadPoolExecutor(max_workers=8) as ex:
@@ -342,8 +361,8 @@ def attach_complex_info(df: pd.DataFrame) -> pd.DataFrame:
                         results_map[key] = dict(CINFO_EMPTY)
 
     for col in CINFO_EMPTY:
-        df[col] = [results_map.get((gu, name), CINFO_EMPTY).get(col)
-                   for gu, name in zip(df["자치구"], df["아파트명"])]
+        df[col] = [results_map.get((gu, dong, name), CINFO_EMPTY).get(col)
+                   for gu, dong, name in zip(df["자치구"], df["법정동"], df["아파트명"])]
     return df
 
 
@@ -410,6 +429,17 @@ def build_popup_html(gu: str, dong: str, apt: str, addr: str, deals: pd.DataFram
     )
 
 
+def build_marker_label(apt: str, deals: pd.DataFrame) -> str:
+    """지도에 항상 보이는 짧은 라벨: 단지명 + 대표 면적 + 대표 매매가"""
+    short_apt = apt if len(apt) <= 7 else apt[:7] + "…"
+    if deals.empty:
+        return short_apt
+    grp = deals.groupby(deals["전용면적(㎡)"].round().astype(int))["거래금액(만원)"]
+    # 거래건수가 가장 많은 평형을 대표값으로 사용
+    rep_area, rep_series = max(grp, key=lambda t: len(t[1]))
+    return f"{short_apt} {rep_area}㎡ {_fmt_price(rep_series.mean())}"
+
+
 def render_kakao_map(marker_data: list):
     markers_str = json.dumps(marker_data, ensure_ascii=False)
 
@@ -440,26 +470,33 @@ def render_kakao_map(marker_data: list):
         var map = new kakao.maps.Map(container, options);
         var markers = {markers_str};
         var bounds = new kakao.maps.LatLngBounds();
-
-        var starImage = new kakao.maps.MarkerImage(
-            'https://t1.daumcdn.net/localimg/localimages/07/mapapidoc/markerStar.png',
-            new kakao.maps.Size(24, 35)
-        );
-
         var openIw = null;
 
-        markers.forEach(function(m) {{
+        markers.forEach(function(m, idx) {{
             var pos = new kakao.maps.LatLng(m.lat, m.lng);
             bounds.extend(pos);
-            var opts = {{ position: pos, map: map }};
-            if (m.selected) {{ opts.image = starImage; opts.zIndex = 10; }}
-            var marker = new kakao.maps.Marker(opts);
-            var iw = new kakao.maps.InfoWindow({{ content: m.html, removable: true }});
-            kakao.maps.event.addListener(marker, 'click', function() {{
+
+            // 핀 대신 단지명·대표면적·가격이 바로 보이는 라벨 뱃지
+            var badge = document.createElement('div');
+            badge.textContent = m.label;
+            badge.style.cssText =
+                'padding:3px 7px;border-radius:6px;font-size:11px;font-weight:600;' +
+                'white-space:nowrap;cursor:pointer;box-shadow:0 1px 3px rgba(0,0,0,.3);' +
+                'border:1.5px solid ' + (m.selected ? '#f5a623' : '#4B7BEC') + ';' +
+                'background:' + (m.selected ? '#fff8e6' : '#ffffff') + ';color:#222;';
+            badge.onmouseenter = function() {{ badge.style.zIndex = 20; }};
+
+            var overlay = new kakao.maps.CustomOverlay({{
+                position: pos, content: badge, map: map,
+                yAnchor: 1.4, zIndex: m.selected ? 10 : 1
+            }});
+
+            var iw = new kakao.maps.InfoWindow({{ position: pos, content: m.html, removable: true }});
+            badge.addEventListener('click', function() {{
                 if (openIw === iw) {{ iw.close(); openIw = null; }}
                 else {{
                     if (openIw) {{ openIw.close(); }}
-                    iw.open(map, marker);
+                    iw.open(map);
                     openIw = iw;
                 }}
             }});
@@ -508,10 +545,11 @@ st.sidebar.markdown("---")
 st.sidebar.header("🔍 2. 필터")
 
 FILTER_DEFAULTS = {
-    "f_use_price": False, "f_price_min": "", "f_price_max": "",
-    "f_use_area": False, "f_area": (10.0, 200.0),
+    # 기본 프리셋: 가격 최대 8.5억 / 전용면적 최소 50㎡ / 세대수 최소 300세대
+    "f_use_price": True, "f_price_min": "", "f_price_max": "85",
+    "f_use_area": True, "f_area": (50.0, 200.0),
     "f_use_floor": False, "f_floor": (-3, 70),
-    "f_use_hh": False, "f_hh": (0, 2000), "f_hh_unknown": True,
+    "f_use_hh": True, "f_hh": (300, 2000), "f_hh_unknown": True,
     "f_show_cinfo": False,
     "f_kw": "",
 }
@@ -772,7 +810,7 @@ with tab2:
         st.info("표시할 데이터가 없습니다. 먼저 리스트 탭에서 검색을 진행해주세요.")
     else:
         st.caption(
-            "📍 지도 클릭 시 팝업으로 단지명·평균 거래가가 표시됩니다. "
+            "📍 지도의 라벨에 단지명·대표 면적·가격이 바로 보이고, 클릭하면 상세정보 팝업이 뜹니다. "
             "아래 **핀 선택 목록**에서 단지를 골라 선택(강조)하고 엑셀로 내려받을 수 있습니다."
         )
 
@@ -815,6 +853,7 @@ with tab2:
                 marker_data.append({
                     "lat": r["lat"], "lng": r["lng"],
                     "selected": apt_label in selected_labels,
+                    "label": build_marker_label(r["아파트명"], deals),
                     "html": build_popup_html(r["자치구"], r["법정동"], r["아파트명"], r["주소"], deals),
                 })
             render_kakao_map(marker_data)
