@@ -1,0 +1,28 @@
+# Render Blueprint — GAP-RADAR FastAPI 서버 전용 배포 설정.
+#
+# 이 파일은 기존 Streamlit 앱(app.py)과 완전히 무관하다. Streamlit Cloud는
+# render.yaml을 전혀 참조하지 않으므로 기존 배포에 아무 영향이 없다.
+#
+# rootDir을 api로 지정했기 때문에, buildCommand/startCommand는 모두
+# api/ 폴더를 기준으로 실행된다 (api/requirements.txt, api/main.py).
+services:
+  - type: web
+    name: gap-radar-api
+    runtime: python
+    plan: free
+    rootDir: api
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
+    autoDeployTrigger: commit
+    envVars:
+      # 로컬 .env와 동일한 국토부 API 키를 재사용한다. 값은 Render 대시보드에서
+      # 직접 입력하며(sync: false), 이 파일이나 깃허브에는 절대 값이 남지 않는다.
+      - key: MOLIT_API_KEY
+        sync: false
+      # 운영용 GAP_RADAR_API_KEY — 로컬 테스트용 키와 다른 새 값을 대시보드에서 입력한다.
+      - key: GAP_RADAR_API_KEY
+        sync: false
+      # 로컬(3.14.6)과 최대한 동일한 파이썬 버전으로 고정.
+      - key: PYTHON_VERSION
+        value: 3.14.6
