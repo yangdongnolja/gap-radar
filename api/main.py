@@ -41,7 +41,7 @@ app = FastAPI(
         "서울 아파트 매매 실거래가를 조회하는 읽기 전용 API. "
         "기존 Streamlit 앱(GAP-RADAR)과 독립적으로 동작하며, 같은 국토부 API 키를 재사용한다."
     ),
-    version="0.1.0",
+    version="0.2.0",
 )
 
 app.add_middleware(
@@ -123,9 +123,15 @@ def _run_molit(fn, *args, **kwargs):
 
 @app.exception_handler(Exception)
 async def unhandled_exception_handler(request: Request, exc: Exception):
+    # 다른 모든 오류(HTTPException)와 형태를 통일: {"detail": {"error":..., "message":...}}
     return JSONResponse(
         status_code=500,
-        content={"error": "internal_server_error", "message": "예상치 못한 서버 오류가 발생했습니다."},
+        content={
+            "detail": {
+                "error": "internal_server_error",
+                "message": "예상치 못한 서버 오류가 발생했습니다.",
+            }
+        },
     )
 
 
@@ -134,6 +140,24 @@ async def unhandled_exception_handler(request: Request, exc: Exception):
 # ------------------------------------------------------------------
 class HealthResponse(BaseModel):
     status: str
+
+
+class ErrorDetail(BaseModel):
+    error: str
+    message: str
+
+
+class ErrorResponse(BaseModel):
+    detail: ErrorDetail
+
+
+# 4개 엔드포인트에서 공통으로 발생 가능한 오류를 OpenAPI 문서에 명시하기 위한 세트.
+COMMON_ERROR_RESPONSES = {
+    400: {"model": ErrorResponse, "description": "잘못된 요청 (지원하지 않는 지역, 가격/면적 범위 역전, 잘못된 날짜 형식 등)"},
+    401: {"model": ErrorResponse, "description": "인증 실패 (X-API-Key 헤더 누락 또는 값 불일치)"},
+    502: {"model": ErrorResponse, "description": "국토부 실거래가 API 호출 또는 응답 처리 실패"},
+    503: {"model": ErrorResponse, "description": "서버에 필요한 API 키(GAP_RADAR_API_KEY/MOLIT_API_KEY)가 설정되지 않음"},
+}
 
 
 class Transaction(BaseModel):
@@ -148,9 +172,11 @@ class Transaction(BaseModel):
 
 
 class TransactionsResponse(BaseModel):
-    count: int
+    count: int = Field(description="필터 적용 후 전체 결과 건수 (limit 적용 전)")
+    returned_count: int = Field(description="실제로 응답에 담겨 반환된 건수 (최대 limit)")
+    truncated: bool = Field(description="count가 limit을 초과해 일부만 반환됐는지 여부")
     filters: dict
-    results: list[Transaction]
+    results: list[Transaction] = Field(description="최신 거래일(deal_date) 내림차순으로 정렬됨")
 
 
 class ComplexAnalysisItem(BaseModel):
@@ -164,11 +190,22 @@ class ComplexAnalysisItem(BaseModel):
     max_price: int = Field(description="단위: 만원")
     latest_price: int = Field(description="단위: 만원")
     latest_deal_date: str
-    june_transaction_count: Optional[int] = Field(None, description="조회범위 중 이전 달 거래건수")
-    june_average_price: Optional[float] = Field(None, description="조회범위 중 이전 달 평균가(만원)")
-    july_transaction_count: Optional[int] = Field(None, description="조회범위 중 이후 달 거래건수")
-    july_average_price: Optional[float] = Field(None, description="조회범위 중 이후 달 평균가(만원)")
-    price_change_percent: Optional[float] = Field(None, description="이전 달 대비 이후 달 평균가 변화율(%)")
+
+    first_month: Optional[str] = Field(None, description="조회 범위 중 이전 달, 형식 YYYY-MM (범위가 2개월일 때만 값 존재)")
+    first_month_transaction_count: Optional[int] = Field(None, description="first_month의 거래건수")
+    first_month_average_price: Optional[float] = Field(None, description="first_month의 평균가(만원)")
+    first_month_min_price: Optional[int] = Field(None, description="first_month의 최저가(만원)")
+    first_month_max_price: Optional[int] = Field(None, description="first_month의 최고가(만원)")
+
+    second_month: Optional[str] = Field(None, description="조회 범위 중 이후 달, 형식 YYYY-MM (범위가 2개월일 때만 값 존재)")
+    second_month_transaction_count: Optional[int] = Field(None, description="second_month의 거래건수")
+    second_month_average_price: Optional[float] = Field(None, description="second_month의 평균가(만원)")
+    second_month_min_price: Optional[int] = Field(None, description="second_month의 최저가(만원)")
+    second_month_max_price: Optional[int] = Field(None, description="second_month의 최고가(만원)")
+
+    price_change_percent: Optional[float] = Field(
+        None, description="first_month 평균가 대비 second_month 평균가 변화율(%)"
+    )
 
 
 class ComplexAnalysisResponse(BaseModel):
@@ -181,7 +218,7 @@ class ComplexAnalysisResponse(BaseModel):
 # ------------------------------------------------------------------
 # /health — 인증 불필요
 # ------------------------------------------------------------------
-@app.get("/health", response_model=HealthResponse, summary="서버 상태 확인")
+@app.get("/health", response_model=HealthResponse, summary="서버 상태 확인", operation_id="health_check")
 async def health():
     return {"status": "ok"}
 
@@ -193,7 +230,9 @@ async def health():
     "/api/v1/transactions",
     response_model=TransactionsResponse,
     summary="아파트 매매 실거래 목록 조회",
+    operation_id="get_transactions",
     dependencies=[Depends(require_api_key)],
+    responses=COMMON_ERROR_RESPONSES,
 )
 async def get_transactions(
     sido: Optional[str] = Query("서울특별시", description="현재 서울특별시만 지원"),
@@ -207,6 +246,10 @@ async def get_transactions(
     min_area: Optional[float] = Query(None, ge=0, description="최소 전용면적(㎡)"),
     max_area: Optional[float] = Query(None, ge=0, description="최대 전용면적(㎡)"),
     complex_name: Optional[str] = Query(None, description="단지명 부분 검색"),
+    limit: int = Query(
+        200, ge=1, le=500,
+        description="최대 반환 건수. 최신 거래일(deal_date) 내림차순으로 상위 N건만 반환됩니다.",
+    ),
 ):
     _check_range(min_price, max_price, "price")
     _check_range(min_area, max_area, "area")
@@ -235,15 +278,23 @@ async def get_transactions(
         kw = complex_name.strip()
         all_rows = [r for r in all_rows if kw in r["complex_name"]]
 
+    # 최신 거래일 순으로 정렬 후, limit을 초과하는 나머지는 잘라낸다.
+    # (어떤 거래를 우선 반환할지의 규칙: "최신 거래일부터")
+    all_rows.sort(key=lambda r: r["deal_date"], reverse=True)
+    total_count = len(all_rows)
+    sliced = all_rows[:limit]
+
     return {
-        "count": len(all_rows),
+        "count": total_count,
+        "returned_count": len(sliced),
+        "truncated": total_count > limit,
         "filters": {
             "sido": sido, "gu": gu, "year": year, "month": month,
             "min_price": min_price, "max_price": max_price,
             "min_area": min_area, "max_area": max_area,
-            "complex_name": complex_name,
+            "complex_name": complex_name, "limit": limit,
         },
-        "results": all_rows,
+        "results": sliced,
     }
 
 
@@ -254,13 +305,21 @@ async def get_transactions(
     "/api/v1/complex-analysis",
     response_model=ComplexAnalysisResponse,
     summary="단지별 실거래 분석 (ChatGPT 연동용 핵심 API)",
+    operation_id="get_complex_analysis",
     dependencies=[Depends(require_api_key)],
+    responses=COMMON_ERROR_RESPONSES,
 )
 async def complex_analysis(
-    sido: Optional[str] = Query("서울특별시"),
+    sido: Optional[str] = Query("서울특별시", description="서울특별시만 지원"),
     gu: Optional[str] = Query(None, description="생략 시 서울 전체 25개 구를 조회합니다 — 느릴 수 있습니다."),
-    from_year_month: str = Query(..., description="조회 시작 연월, 예: 2026-06"),
-    to_year_month: str = Query(..., description="조회 종료 연월, 예: 2026-07 (최대 3개월)"),
+    from_year_month: str = Query(
+        ..., description="조회 시작 연월, 형식 YYYY-MM",
+        json_schema_extra={"examples": ["2026-06"]},
+    ),
+    to_year_month: str = Query(
+        ..., description="조회 종료 연월, 형식 YYYY-MM (from_year_month로부터 최대 3개월)",
+        json_schema_extra={"examples": ["2026-07"]},
+    ),
     min_price: Optional[int] = Query(None, ge=0, description="최소 거래금액(만원)"),
     max_price: Optional[int] = Query(None, ge=0, description="최대 거래금액(만원)"),
     min_area: Optional[float] = Query(None, ge=0, description="최소 전용면적(㎡)"),
@@ -316,8 +375,8 @@ async def complex_analysis(
         groups[key].append(r)
 
     month_labels = [f"{yy:04d}-{mm:02d}" for yy, mm in months]
-    earlier_label = month_labels[0] if len(month_labels) >= 2 else None
-    later_label = month_labels[-1] if len(month_labels) >= 2 else None
+    first_label = month_labels[0] if len(month_labels) >= 2 else None
+    second_label = month_labels[-1] if len(month_labels) >= 2 else None
 
     results = []
     for (gu_name, dong, name, area), deals in groups.items():
@@ -339,19 +398,29 @@ async def complex_analysis(
             "latest_deal_date": latest["deal_date"],
         }
 
-        if earlier_label and later_label and earlier_label != later_label:
-            earlier_prices = [d["price"] for d in deals if d["deal_date"][:7] == earlier_label]
-            later_prices = [d["price"] for d in deals if d["deal_date"][:7] == later_label]
-            if earlier_prices:
-                item["june_transaction_count"] = len(earlier_prices)
-                item["june_average_price"] = round(sum(earlier_prices) / len(earlier_prices), 1)
-            if later_prices:
-                item["july_transaction_count"] = len(later_prices)
-                item["july_average_price"] = round(sum(later_prices) / len(later_prices), 1)
-            if earlier_prices and later_prices and item.get("june_average_price"):
+        if first_label and second_label and first_label != second_label:
+            first_deals = [d for d in deals if d["deal_date"][:7] == first_label]
+            second_deals = [d for d in deals if d["deal_date"][:7] == second_label]
+
+            item["first_month"] = first_label
+            item["second_month"] = second_label
+
+            if first_deals:
+                fp = [d["price"] for d in first_deals]
+                item["first_month_transaction_count"] = len(fp)
+                item["first_month_average_price"] = round(sum(fp) / len(fp), 1)
+                item["first_month_min_price"] = min(fp)
+                item["first_month_max_price"] = max(fp)
+            if second_deals:
+                sp = [d["price"] for d in second_deals]
+                item["second_month_transaction_count"] = len(sp)
+                item["second_month_average_price"] = round(sum(sp) / len(sp), 1)
+                item["second_month_min_price"] = min(sp)
+                item["second_month_max_price"] = max(sp)
+            if first_deals and second_deals and item.get("first_month_average_price"):
                 item["price_change_percent"] = round(
-                    (item["july_average_price"] - item["june_average_price"])
-                    / item["june_average_price"]
+                    (item["second_month_average_price"] - item["first_month_average_price"])
+                    / item["first_month_average_price"]
                     * 100,
                     2,
                 )
@@ -370,8 +439,9 @@ async def complex_analysis(
             "min_transactions": min_transactions,
         },
         "note": (
-            "june_*/july_* 필드는 실제 6월·7월이 아니라 조회 범위의 "
-            "'이전 달'/'이후 달' 실적입니다. 조회 범위가 정확히 2개월일 때만 채워집니다."
+            "first_month/second_month 필드는 조회 범위의 이전 달/이후 달을 실제 YYYY-MM 값으로 담습니다 "
+            "(예: from_year_month=2026-06, to_year_month=2026-07 이면 first_month=\"2026-06\", "
+            "second_month=\"2026-07\"). 조회 범위가 정확히 2개월일 때만 채워집니다."
         ),
         "results": results,
     }
