@@ -118,6 +118,7 @@ def parse_item(item, gu_name: str, ymd: str):
 
     apt_name = clean_apt_name(gettext("aptNm"))
     dong = gettext("umdNm")
+    dong_code = gettext("umdCd")
     jibun = gettext("jibun")
     floor_str = gettext("floor")
     day = gettext("dealDay")
@@ -149,6 +150,8 @@ def parse_item(item, gu_name: str, ymd: str):
         "계약일": f"{ymd[:4]}-{ymd[4:]}-{day.zfill(2) if day else '01'}",
         "자치구": gu_name,
         "법정동": dong,
+        "법정동코드": dong_code,
+        "지번": jibun,
         "아파트명": apt_name,
         "전용면적(㎡)": area,
         "층": floor_str,
@@ -250,6 +253,92 @@ def fetch_apt_list(gu_code: str):
 CINFO_EMPTY = {"세대수": None, "준공연도": None, "건폐율(%)": None, "용적률(%)": None}
 
 
+def _fill_building_info(info: dict, item: dict) -> dict:
+    """건축물대장 항목으로 아직 비어 있는 단지정보만 보충한다."""
+    result = dict(info)
+    numeric_fields = {
+        "세대수": ("hhldCnt", int),
+        "건폐율(%)": ("bcRat", float),
+        "용적률(%)": ("vlRat", float),
+    }
+    for output_name, (source_name, converter) in numeric_fields.items():
+        value = item.get(source_name)
+        if result.get(output_name) is None and value not in (None, "", " ", 0, "0"):
+            try:
+                result[output_name] = converter(float(value))
+            except (TypeError, ValueError):
+                pass
+
+    used = str(item.get("useAprDay") or "").strip()
+    if result.get("준공연도") is None and len(used) >= 4 and used[:4].isdigit():
+        result["준공연도"] = int(used[:4])
+    return result
+
+
+@st.cache_data(ttl=2592000, show_spinner=False)
+def resolve_bjdong_code(address: str) -> str:
+    """카카오 주소검색으로 건축물대장 조회에 필요한 10자리 법정동코드를 찾는다."""
+    try:
+        resp = requests.get(
+            "https://dapi.kakao.com/v2/local/search/address.json",
+            headers={"Authorization": f"KakaoAK {KAKAO_REST_API_KEY}"},
+            params={"query": str(address or "").strip()},
+            timeout=5,
+        )
+        resp.raise_for_status()
+        documents = resp.json().get("documents", [])
+        if documents:
+            code = str((documents[0].get("address") or {}).get("b_code") or "").strip()
+            if len(code) == 10 and code.isdigit():
+                return code
+    except (requests.RequestException, ValueError, TypeError) as exc:
+        raise RuntimeError("카카오 법정동코드 조회 실패") from exc
+    return ""
+
+
+@st.cache_data(ttl=86400, show_spinner=False)
+def fetch_building_info(sigungu_code: str, bjdong_code: str, jibun: str):
+    """실거래의 법정동코드와 지번으로 건축물대장 정보를 직접 조회한다."""
+    info = dict(CINFO_EMPTY)
+    bjdong_code = str(bjdong_code or "").strip()
+    jibun = str(jibun or "").strip()
+    match = re.match(r"^(산\s*)?(\d+)(?:-(\d+))?", jibun)
+    if not (len(sigungu_code) == 5 and len(bjdong_code) == 5 and match):
+        return info
+
+    try:
+        resp = requests.get(
+            "https://apis.data.go.kr/1613000/BldRgstHubService/getBrRecapTitleInfo",
+            params={
+                "serviceKey": MOLIT_API_KEY,
+                "sigunguCd": sigungu_code,
+                "bjdongCd": bjdong_code,
+                "platGbCd": "1" if match.group(1) else "0",
+                "bun": match.group(2).zfill(4),
+                "ji": (match.group(3) or "0").zfill(4),
+                "numOfRows": "10",
+                "_type": "json",
+            },
+            verify=False,
+            timeout=15,
+        )
+        resp.raise_for_status()
+        response_data = resp.json().get("response", {})
+        result_code = str(response_data.get("header", {}).get("resultCode") or "").strip()
+        if result_code and result_code not in ("00", "000"):
+            raise RuntimeError("건축물대장 API 오류")
+        body = response_data.get("body", {})
+        items = body.get("items") or {}
+        item = items.get("item") if isinstance(items, dict) else items
+        if isinstance(item, list):
+            item = item[0] if item else None
+        if isinstance(item, dict):
+            return _fill_building_info(info, item)
+    except (requests.RequestException, ValueError, TypeError) as exc:
+        raise RuntimeError("건축물대장 보조 조회 실패") from exc
+    return info
+
+
 @st.cache_data(ttl=86400, show_spinner=False)
 def fetch_complex_info(kapt_code: str):
     """단지별 상세정보 및 건축물대장 조회 캐싱 (24시간 유지)"""
@@ -294,13 +383,29 @@ def fetch_complex_info(kapt_code: str):
                 it = items.get("item") if isinstance(items, dict) else items
                 if isinstance(it, list):
                     it = it[0] if it else None
-                if it:
-                    bc, vl = it.get("bcRat"), it.get("vlRat")
-                    if bc not in (None, "", 0, "0"):
-                        info["건폐율(%)"] = float(bc)
-                    if vl not in (None, "", 0, "0"):
-                        info["용적률(%)"] = float(vl)
+                if isinstance(it, dict):
+                    info = _fill_building_info(info, it)
         except Exception:
+            pass
+    return info
+
+
+def fetch_best_complex_info(
+    kapt_code, sigungu_code: str, bjdong_code: str, jibun: str, address: str
+):
+    """공동주택 정보를 우선 사용하고, 빈 값은 실거래 주소의 건축물대장으로 보충한다."""
+    info = fetch_complex_info(kapt_code) if kapt_code else dict(CINFO_EMPTY)
+    if any(info.get(column) is None for column in CINFO_EMPTY):
+        try:
+            if len(str(bjdong_code or "").strip()) != 5:
+                full_code = resolve_bjdong_code(address)
+                if full_code.startswith(sigungu_code):
+                    bjdong_code = full_code[5:]
+            fallback = fetch_building_info(sigungu_code, bjdong_code, jibun)
+            for column in CINFO_EMPTY:
+                if info.get(column) is None and fallback.get(column) is not None:
+                    info[column] = fallback[column]
+        except RuntimeError:
             pass
     return info
 
@@ -360,26 +465,36 @@ def attach_complex_info(df: pd.DataFrame) -> pd.DataFrame:
     섞여 세대수 등이 틀리게 표시되는 문제가 있었다.
     """
     df = df.copy()
-    triples = df[["자치구", "법정동", "아파트명"]].drop_duplicates()
+    key_columns = ["자치구", "법정동", "아파트명"]
+    location_columns = ["법정동코드", "지번", "주소"]
+    for column in location_columns:
+        if column not in df.columns:
+            df[column] = ""
+    triples = df[key_columns + location_columns].drop_duplicates(subset=key_columns)
     results_map = {}
 
     for gu in triples["자치구"].unique():
         gu_code = LAWD_CD_DICT[gu]
         entries = fetch_apt_list(gu_code)
 
-        gu_triples = triples.loc[triples["자치구"] == gu, ["법정동", "아파트명"]].drop_duplicates()
+        gu_triples = triples.loc[
+            triples["자치구"] == gu,
+            ["법정동", "아파트명", "법정동코드", "지번", "주소"],
+        ]
         to_fetch = []
 
-        for dong, name in gu_triples.itertuples(index=False):
+        for dong, name, dong_code, jibun, address in gu_triples.itertuples(index=False):
             kapt_code = _match_kapt(name, dong, entries)
-            if kapt_code is None:
-                results_map[(gu, dong, name)] = dict(CINFO_EMPTY)
-            else:
-                to_fetch.append(((gu, dong, name), kapt_code))
+            to_fetch.append(((gu, dong, name), kapt_code, dong_code, jibun, address))
 
         if to_fetch:
             with ThreadPoolExecutor(max_workers=8) as ex:
-                futures = {ex.submit(fetch_complex_info, code): key for key, code in to_fetch}
+                futures = {
+                    ex.submit(
+                        fetch_best_complex_info, code, gu_code, dong_code, jibun, address
+                    ): key
+                    for key, code, dong_code, jibun, address in to_fetch
+                }
                 for future in futures:
                     key = futures[future]
                     try:
