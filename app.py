@@ -434,7 +434,7 @@ def build_popup_html(gu: str, dong: str, apt: str, addr: str, deals: pd.DataFram
     rows = [f"{area}㎡ 평균 <b>{_fmt_price(s.mean())}</b> ({len(s)}건)"
             for area, s in sorted(grp, key=lambda t: t[0])][:5]
 
-    naver_url = "https://search.naver.com/search.naver?query=" + quote(f"{dong} {apt}")
+    naver_url = naver_search_url(dong, apt)
     divider = "<hr style='margin:4px 0;border:none;border-top:1px solid #ddd;'/>"
     return (
         "<div style='padding:8px 12px;font-size:12px;line-height:1.7;min-width:200px;max-width:250px;'>"
@@ -443,7 +443,7 @@ def build_popup_html(gu: str, dong: str, apt: str, addr: str, deals: pd.DataFram
         + "<br/>".join(rows)
         + divider
         + f"<span style='color:#666'>{addr}</span><br/>"
-        + f"<a href='{naver_url}' target='_blank' style='color:#03c75a;font-weight:bold;text-decoration:none;'>네이버에서 단지정보 보기 ↗</a>"
+        + f"<a href='{naver_url}' target='_blank' style='color:#03c75a;font-weight:bold;text-decoration:none;'>네이버페이 부동산에서 검색 ↗</a>"
         + "</div>"
     )
 
@@ -810,14 +810,15 @@ DISPLAY_COLS = ["계약일", "자치구", "법정동", "아파트명", "전용�
 if filtered_df is not None:
     DISPLAY_COLS += [c for c in ["세대수", "준공연도", "건폐율(%)", "용적률(%)"] if c in filtered_df.columns]
 
-def naver_search_url(name: str) -> str:
-    """단지명 클릭 시 이동할 네이버 검색 링크. LinkColumn의 display_text 정규식이
-    'query=' 뒤 문자열을 그대로 잘라 보여주므로, URL 인코딩 없이 원문 그대로 붙인다."""
-    return f"https://search.naver.com/search.naver?query={name}"
+def naver_search_url(dong: str, name: str) -> str:
+    """법정동과 괄호 설명을 제거한 단지명으로 네이버페이 부동산을 검색한다."""
+    clean_name = re.sub(r"\s*\([^)]*\)", "", str(name)).strip()
+    keyword = f"{str(dong).strip()} {clean_name}".strip()
+    return f"https://new.land.naver.com/search?sk={quote(keyword)}&display={name}"
 
 
 NAVER_LINK_CONFIG = {
-    "아파트명": st.column_config.LinkColumn("아파트명", display_text=r"query=(.+)$"),
+    "아파트명": st.column_config.LinkColumn("아파트명", display_text=r"display=(.+)$"),
 }
 
 NUM_COL_CONFIG = {
@@ -862,10 +863,12 @@ with tab1:
         page_df = sorted_df.iloc[start_idx:start_idx + page_size]
 
         page_df_view = page_df[DISPLAY_COLS].copy()
-        page_df_view["아파트명"] = page_df_view["아파트명"].apply(naver_search_url)
+        page_df_view["아파트명"] = page_df_view.apply(
+            lambda row: naver_search_url(row["법정동"], row["아파트명"]), axis=1
+        )
         st.dataframe(page_df_view, use_container_width=True, hide_index=True,
                      column_config={**NUM_COL_CONFIG, **NAVER_LINK_CONFIG})
-        st.caption(f"페이지 {page_num} / {total_pages} (전체 {len(sorted_df):,}건, 50건씩 표시) · 아파트명 클릭 시 네이버 검색으로 이동")
+        st.caption(f"페이지 {page_num} / {total_pages} (전체 {len(sorted_df):,}건, 50건씩 표시) · 아파트명 클릭 시 네이버페이 부동산 검색으로 이동")
 
         st.markdown("### 🏢 단지별 요약")
         summary_df = (
@@ -881,7 +884,9 @@ with tab1:
         summary_df["평균가"] = summary_df["평균가"].round(0).astype(int)
         summary_df = summary_df.sort_values(by="거래건수", ascending=False)
         summary_df_view = summary_df.copy()
-        summary_df_view["아파트명"] = summary_df_view["아파트명"].apply(naver_search_url)
+        summary_df_view["아파트명"] = summary_df_view.apply(
+            lambda row: naver_search_url(row["법정동"], row["아파트명"]), axis=1
+        )
         st.dataframe(summary_df_view, use_container_width=True, hide_index=True,
                      column_config={**NUM_COL_CONFIG, **NAVER_LINK_CONFIG})
 

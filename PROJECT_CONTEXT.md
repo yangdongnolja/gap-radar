@@ -197,7 +197,7 @@ FastAPI만 Render에 배포하는 Blueprint다. `rootDir: api`이므로 루트�
 | 국토교통부 건축물대장 총괄표제부 | `app.py` | 건폐율, 용적률 | `MOLIT_API_KEY` 및 해당 API 활용신청/승인 |
 | Kakao Local 주소검색 REST API | `app.py` | 주소를 위도·경도로 변환 | `KAKAO_REST_API_KEY` |
 | Kakao Maps JavaScript SDK | `app.py` | 지도·마커·팝업 표시 | `KAKAO_API_KEY`(JavaScript 키), 허용 도메인 설정 |
-| 네이버 통합검색 | `app.py` | 단지 상세정보 검색 링크 | 키 없음 |
+| 네이버페이 부동산 검색 | `app.py` | 법정동과 괄호 설명을 제거한 단지명으로 단지 검색 | 키 없음 |
 
 주의: 하나의 공공데이터포털 키를 쓰더라도 각 국토부 API의 활용신청 및 승인 상태는 별개일 수 있다.
 
@@ -376,7 +376,7 @@ Invoke-RestMethod -Uri "http://127.0.0.1:8000/api/v1/transactions?gu=강남구&y
 - 법정동 우선 단지명 유사도 매칭
 - 리스트 50건 단위 페이지 표시
 - 단지별 거래건수·평균·최저·최고가 요약
-- 네이버 단지 검색 링크
+- 네이버페이 부동산 단지 검색 링크(법정동+괄호 제거 단지명)
 - 카카오 지도 라벨, 선택 강조, 상세 팝업
 - 최대 300개 지도 단지 제한
 - 필터 결과, 단지 요약, 지도 선택 단지 XLSX 다운로드
@@ -445,7 +445,7 @@ Invoke-RestMethod -Uri "http://127.0.0.1:8000/api/v1/transactions?gu=강남구&y
     UI, API 클라이언트, 데이터 가공, 지도 JavaScript가 한 파일에 결합되어 수정 영향 범위가 크다. 다만 기존 기능 보호 원칙상 테스트 없이 대규모 분리 리팩터링을 먼저 하면 안 된다.
 
 12. **URL 구성과 지도 SDK 우회 코드**  
-    네이버 링크 일부는 원문 문자열을 직접 URL에 붙인다. 카카오 SDK의 HTTP 스크립트를 HTTPS로 바꾸기 위해 `HTMLScriptElement.prototype.src`를 재정의하는 우회는 SDK 동작 변경에 민감하다.
+    네이버페이 부동산 링크는 검색어를 URL 인코딩하지만 화면 표시용 단지명은 별도 매개변수에 원문으로 붙인다. 카카오 SDK의 HTTP 스크립트를 HTTPS로 바꾸기 위해 `HTMLScriptElement.prototype.src`를 재정의하는 우회는 SDK 동작 변경에 민감하다.
 
 ### 품질 관리
 
