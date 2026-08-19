@@ -100,6 +100,14 @@ def month_range(start_ymd: str, end_ymd: str):
     return months
 
 
+def clean_apt_name(name: str) -> str:
+    """화면용 단지명에서 괄호 설명과 끝에 붙은 숫자 동 표기를 제거한다."""
+    original = str(name).strip()
+    cleaned = re.sub(r"\s*\([^)]*\)", "", original).strip()
+    cleaned = re.sub(r"\s*(?:제\s*)?\d+\s*동$", "", cleaned).strip()
+    return cleaned or original
+
+
 def parse_item(item, gu_name: str, ymd: str):
     def gettext(tag):
         el = item.find(tag)
@@ -108,7 +116,7 @@ def parse_item(item, gu_name: str, ymd: str):
     if gettext("cdealType"):  # 취소 거래 제외
         return None
 
-    apt_name = gettext("aptNm")
+    apt_name = clean_apt_name(gettext("aptNm"))
     dong = gettext("umdNm")
     jibun = gettext("jibun")
     floor_str = gettext("floor")
@@ -196,7 +204,7 @@ def fetch_one(gu_code: str, gu_name: str, ymd: str):
 
 def _norm_apt_name(s: str) -> str:
     """단지명 매칭용 정규화: 괄호 내용 제거 후 한글/영문/숫자만 남김"""
-    s = re.sub(r"\(.*?\)", "", s)
+    s = clean_apt_name(s)
     s = re.sub(r"[^0-9a-zA-Z가-힣]", "", s)
     return s.lower()
 
@@ -811,10 +819,10 @@ if filtered_df is not None:
     DISPLAY_COLS += [c for c in ["세대수", "준공연도", "건폐율(%)", "용적률(%)"] if c in filtered_df.columns]
 
 def naver_search_url(dong: str, name: str) -> str:
-    """법정동과 괄호 설명을 제거한 단지명으로 네이버페이 부동산을 검색한다."""
-    clean_name = re.sub(r"\s*\([^)]*\)", "", str(name)).strip()
+    """법정동과 정제된 단지명으로 네이버페이 부동산을 검색한다."""
+    clean_name = clean_apt_name(name)
     keyword = f"{str(dong).strip()} {clean_name}".strip()
-    return f"https://new.land.naver.com/search?sk={quote(keyword)}&display={name}"
+    return f"https://new.land.naver.com/search?sk={quote(keyword)}&display={clean_name}"
 
 
 NAVER_LINK_CONFIG = {
