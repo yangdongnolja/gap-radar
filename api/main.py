@@ -42,6 +42,12 @@ app = FastAPI(
         "기존 Streamlit 앱(GAP-RADAR)과 독립적으로 동작하며, 같은 국토부 API 키를 재사용한다."
     ),
     version="0.2.0",
+    servers=[
+        {
+            "url": "https://gap-radar-api-vbg8.onrender.com",
+            "description": "Render 운영 서버",
+        }
+    ],
 )
 
 app.add_middleware(
@@ -191,13 +197,13 @@ class ComplexAnalysisItem(BaseModel):
     latest_price: int = Field(description="단위: 만원")
     latest_deal_date: str
 
-    first_month: Optional[str] = Field(None, description="조회 범위 중 이전 달, 형식 YYYY-MM (범위가 2개월일 때만 값 존재)")
+    first_month: Optional[str] = Field(None, description="조회 범위의 첫 달, 형식 YYYY-MM (범위가 2~3개월일 때 값 존재)")
     first_month_transaction_count: Optional[int] = Field(None, description="first_month의 거래건수")
     first_month_average_price: Optional[float] = Field(None, description="first_month의 평균가(만원)")
     first_month_min_price: Optional[int] = Field(None, description="first_month의 최저가(만원)")
     first_month_max_price: Optional[int] = Field(None, description="first_month의 최고가(만원)")
 
-    second_month: Optional[str] = Field(None, description="조회 범위 중 이후 달, 형식 YYYY-MM (범위가 2개월일 때만 값 존재)")
+    second_month: Optional[str] = Field(None, description="조회 범위의 마지막 달, 형식 YYYY-MM (범위가 2~3개월일 때 값 존재)")
     second_month_transaction_count: Optional[int] = Field(None, description="second_month의 거래건수")
     second_month_average_price: Optional[float] = Field(None, description="second_month의 평균가(만원)")
     second_month_min_price: Optional[int] = Field(None, description="second_month의 최저가(만원)")
@@ -439,9 +445,10 @@ async def complex_analysis(
             "min_transactions": min_transactions,
         },
         "note": (
-            "first_month/second_month 필드는 조회 범위의 이전 달/이후 달을 실제 YYYY-MM 값으로 담습니다 "
+            "first_month/second_month 필드는 조회 범위의 첫 달/마지막 달을 실제 YYYY-MM 값으로 담습니다 "
             "(예: from_year_month=2026-06, to_year_month=2026-07 이면 first_month=\"2026-06\", "
-            "second_month=\"2026-07\"). 조회 범위가 정확히 2개월일 때만 채워집니다."
+            "second_month=\"2026-07\"). 조회 범위가 2~3개월일 때 채워지며, "
+            "3개월 조회에서는 가운데 달도 전체 통계에 포함되지만 월간 비교는 첫 달과 마지막 달을 사용합니다."
         ),
         "results": results,
     }
