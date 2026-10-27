@@ -1,5 +1,12 @@
 # GAP-RADAR 프로젝트 컨텍스트
 
+## 2026-10-27 Streamlit 공동주택 API 수정
+
+- app.py의 단지목록을 AptListService4/getSigunguAptList4, 기본정보를 AptBasisInfoServiceV5/getAphusBassInfoV5로 변경했다. 기존 주소는 실제 HTTP400/NO_OPENAPI_SERVICE_ERROR, 새 주소는 같은 키로 HTTP200을 확인했다.
+- HTTP/JSON/결과코드를 검사해 실패 응답을 빈 정상 단지정보로 캐시하지 않는다. 오류에 키·요청URL·원문을 포함하지 않는다.
+- tests/test_streamlit_complex_info.py의 4개 회귀 검사 및 전체 개발 환경28개 검사 통과. tools/verify_streamlit_complex_live.py로 중랑구137개 단지,111/1,544세대 표본,300세대 필터/리스트/요약/엑셀 확인. 화면 검사 거래 행은 합성 표본이며 실제 단지정보만 외부 조회했다.
+- 기존 REST/국토부 실거래 파서/Render 설정/MCP 서버/키는 변경하지 않았다. 사용자 승인 후 이번 Streamlit 관련 파일만 배포한다.
+
 > 작성 기준: 2026-08-19, Git `master` 브랜치 커밋 `2414522`
 >
 > 이 문서는 현재 구현을 인수·유지보수하기 위한 설명서다. API 키의 실제 값은 기록하지 않는다.

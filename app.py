@@ -212,24 +212,42 @@ def _norm_apt_name(s: str) -> str:
     return s.lower()
 
 
+def _kapt_response_body(resp, label: str) -> dict:
+    """오류 응답을 빈 데이터로 캐시하지 않고, 키/원문 없이 원인을 알린다."""
+    if resp.status_code == 403:
+        raise RuntimeError(f"{label} API 사용 권한을 확인해주세요.")
+    if resp.status_code != 200:
+        raise RuntimeError(f"{label} API 오류 (HTTP {resp.status_code})")
+    try:
+        response = resp.json()["response"]
+        code = str(response["header"]["resultCode"]).strip()
+        if code not in ("00", "000"):
+            raise RuntimeError(f"{label} API가 정상 처리되지 않았습니다.")
+        body = response.get("body") or {}
+        if not isinstance(body, dict):
+            raise ValueError
+        return body
+    except (ValueError, KeyError, TypeError):
+        raise RuntimeError(f"{label} API 응답 형식을 확인하지 못했습니다.") from None
+
+
 @st.cache_data(ttl=86400, show_spinner=False)
 def fetch_apt_list(gu_code: str):
     """공동주택 단지목록 조회 캐싱 (24시간 유지)"""
-    url = "https://apis.data.go.kr/1613000/AptListService3/getSigunguAptList3"
+    url = "https://apis.data.go.kr/1613000/AptListService4/getSigunguAptList4"
     out = []
     page = 1
     while True:
-        resp = requests.get(
-            url,
-            params={"serviceKey": MOLIT_API_KEY, "sigunguCode": gu_code,
-                    "numOfRows": "1000", "pageNo": str(page)},
-            verify=False, timeout=15,
-        )
-        if resp.status_code == 403:
-            raise RuntimeError("공동주택 API 권한이 아직 동기화되지 않았습니다.")
-        if resp.status_code != 200:
-            raise RuntimeError(f"공동주택 단지목록 API 오류 (HTTP {resp.status_code})")
-        body = resp.json().get("response", {}).get("body", {})
+        try:
+            resp = requests.get(
+                url,
+                params={"serviceKey": MOLIT_API_KEY, "sigunguCode": gu_code,
+                        "numOfRows": "1000", "pageNo": str(page)},
+                verify=False, timeout=15,
+            )
+        except requests.RequestException:
+            raise RuntimeError("공동주택 단지목록 서버에 연결하지 못했습니다.") from None
+        body = _kapt_response_body(resp, "공동주택 단지목록")
         items = body.get("items") or []
         if isinstance(items, dict):
             items = items.get("item") or []
@@ -345,13 +363,15 @@ def fetch_complex_info(kapt_code: str):
     info = dict(CINFO_EMPTY)
     try:
         resp = requests.get(
-            "https://apis.data.go.kr/1613000/AptBasisInfoServiceV4/getAphusBassInfoV4",
+            "https://apis.data.go.kr/1613000/AptBasisInfoServiceV5/getAphusBassInfoV5",
             params={"serviceKey": MOLIT_API_KEY, "kaptCode": kapt_code},
             verify=False, timeout=15,
         )
-        item = resp.json().get("response", {}).get("body", {}).get("item", {})
-    except Exception:
-        return info
+    except requests.RequestException:
+        raise RuntimeError("공동주택 기본정보 서버에 연결하지 못했습니다.") from None
+    item = _kapt_response_body(resp, "공동주택 기본정보").get("item") or {}
+    if not isinstance(item, dict):
+        raise RuntimeError("공동주택 기본정보 항목 형식을 확인하지 못했습니다.")
 
     cnt = item.get("kaptdaCnt")
     if cnt not in (None, "", " "):
