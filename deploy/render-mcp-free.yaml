@@ -1,0 +1,19 @@
+# Separate Blueprint. Do not apply/replace the existing render.yaml.
+services:
+  - type: web
+    name: gap-radar-mcp-free
+    runtime: python
+    plan: free
+    buildCommand: pip install -r plugins/gpt-18c748cd216b10824cc670dd93d6903d/server/requirements.txt && python tools/install_server_tunnel.py
+    startCommand: python tools/run_server_tunnel.py
+    healthCheckPath: /health
+    autoDeployTrigger: 'off'
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.12.14
+      - key: CONTROL_PLANE_TUNNEL_ID
+        sync: false
+      - key: CONTROL_PLANE_API_KEY
+        sync: false
+      - key: GAP_RADAR_API_KEY
+        sync: false
