@@ -1,0 +1,21 @@
+# Separate free service. The existing tunnel service is retained for rollback.
+services:
+  - type: web
+    name: gap-radar-mcp-https
+    runtime: python
+    plan: free
+    buildCommand: pip install -r plugins/gpt-18c748cd216b10824cc670dd93d6903d/server/requirements-https.txt
+    startCommand: python tools/run_https_mcp.py
+    healthCheckPath: /health
+    autoDeployTrigger: 'off'
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.12.14
+      - key: GAP_RADAR_API_KEY
+        sync: false
+      - key: MCP_PUBLIC_URL
+        sync: false
+      - key: MCP_TOKEN_SECRET
+        sync: false
+      - key: MCP_LOGIN_PASSWORD_HASH
+        sync: false

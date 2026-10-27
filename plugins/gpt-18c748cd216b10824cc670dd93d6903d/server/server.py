@@ -12,10 +12,13 @@ from adapter import RestAdapter, load_settings
 load_settings()
 
 
-def create_server(adapter: RestAdapter | None = None) -> FastMCP:
+def create_server(adapter: RestAdapter | None = None, *, auth_provider=None, auth=None,
+                  transport_security=None) -> FastMCP:
     upstream = adapter or RestAdapter()
     mcp = FastMCP('GAP-RADAR', host='127.0.0.1', port=8001,
                   stateless_http=True, json_response=True,
+                  auth_server_provider=auth_provider, auth=auth,
+                  transport_security=transport_security,
                   instructions='서울 실거래 읽기 전용 조회. 가격 단위 만원, 면적 ㎡. 집계는 get_complex_analysis, 개별 검증은 get_transactions. truncated=true이면 부분 결과다.')
     annotation = ToolAnnotations(readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=True)
 
