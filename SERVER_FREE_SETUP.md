@@ -1,5 +1,28 @@
 # 무료 서버 이전 (2026-10-27)
 
+## 배포 완료 및 실제 사용
+
+- 서버 깨우기/준비상태: https://gap-radar-mcp-free.onrender.com/ready
+- Render 서비스: https://dashboard.render.com/web/srv-dbg9itvlk1mc73b4eoug
+- Git 브랜치 `codex/mcp-free-server`, 실행 코드 커밋 `c5b115f`.
+- Render Live / Free ($0 월 인스턴스) 확인. 유료 업그레이드는 하지 않았다.
+- 기존 ChatGPT GAP-RADAR 실거래 도구를 그대로 사용한다. 새 플러그인 등록은 필요 없다.
+- 기존 로컬 터널을 종료하고 실행 개수 0 확인 후, 연결된 MCP 도구로 실제 조회 성공.
+  노원6월 전체680건; 가격6~8억/면적59~85㎡ 조건6월135건·7월145건;
+  분석134그룹 및 월별 합계 일치. 같은 시점 직접 REST 결과와 일치했다.
+- `/health` 200, `/ready` 200/tunnel_ready=true;
+  공개 `/mcp`, `/ui`, `/.env` 모두404. 기존 REST 미인증401, Streamlit HTTP200.
+- 회귀23개+추가 공개경로 검사1개 통과. Python 구문 검사 통과.
+- 데이터가 없는 월의 집계값은 null일 수 있으므로 합계 검사에서는0으로 처리했다.
+  첫 수동 검사 스크립트의 null 합산 오류는 검사식 수정 후 재검증했다. 운영 API는 변경하지 않았다.
+- 15분 유휴 후 실제 기동 시간은 이번 작업에서 대기 측정하지 않았다.
+- 키 복사: 시스템 클립보드 방식은 보안 자동검사에서 차단되어 실행하지 않았다.
+  사용자 승인 후 Render의 기존 키를 브라우저 메모리에서 새 서비스 필드로 직접 전달했다.
+  키 값은 채팅·로그·Git·시스템 클립보드에 출력/기록하지 않았다.
+
+사용 순서: 위 준비상태 URL 열기 → tunnel_ready=true 확인 → 기존 ChatGPT에서 질의.
+컴퓨터/검은 창은 필요 없다. 무료 유휴 중단 때문에 사용 중 재기동이 필요할 수 있다.
+
 ## 선택한 방식
 
 기존 ChatGPT의 GAP-RADAR 실거래 도구와 Tunnel ID를 유지하고,
@@ -69,11 +92,12 @@ MCP 관리 UI는 127.0.0.1에만 바인딩한다. 공개 `/mcp`는 없다.
 실패하면 새 서비스만 중단하고 기존 ChatGPT연결.bat을 다시 실행하면 된다.
 기존 Streamlit과 REST는 그대로다. 서버 배포 전에는 검은 창을 종료하지 않는다.
 
-## 현 상태
+## 검증 범위
 
-서버용 코드 준비 및 로컬 테스트 완료. Linux 파일 다운로드/체크섬 통과.
-Windows에서 Linux 바이너리를 실행할 수 없어 Render 런타임 검증은 아직 필요하다.
-실제 서비스 생성/서버 URL/컴퓨터를 끈 ChatGPT 호출은 아직 완료로 표시하지 않는다.
+Linux 실행 파일을 실제 Render에서 실행해 연결 도구 호출까지 확인했다.
+Windows 로컬 터널 종료 후 Codex의 연결된 GAP-RADAR MCP를 통해 검증했으며,
+사용자가 별도의 ChatGPT 웹 대화에서 전환 후 재호출하는 확인은 추가로 할 수 있다.
+컴퓨터 자체를 끄고 이 작업을 수행한 것은 아니다. 로컬 터널 미실행으로 의존성을 분리했다.
 
 공식 근거:
 - https://developers.openai.com/api/docs/guides/secure-mcp-tunnels
