@@ -1,5 +1,19 @@
 # ChatGPT HTTPS 직접 연결 준비
 
+## 현재 운영 서버
+
+- HTTPS MCP: https://gap-radar-mcp-https.onrender.com/mcp
+- 상태: https://gap-radar-mcp-https.onrender.com/health
+- Render: https://dashboard.render.com/web/srv-dbgadrm7bikc73fhhp00
+- 브랜치 codex/mcp-https, 최초 배포 a9196fd, 인스턴스 Free.
+- 공개 health200/미인증401, OAuth PKCE 로그인·갱신·두 도구 호출 및 REST
+  응답 정확 일치(노원6월680건/조건집계134그룹) 확인. ChatGPT 설치는 별도 확인 중.
+- 설정 도구의 비밀값 출력 사고 후 사용자 승인으로 접속 키와 전용 인증값을
+  교체했다. 기존 REST와 터널 복구 확인. 국토부·카카오 키는 변경하지 않았다.
+- 이번 배포의 실제 전용 암호는 로컬 Git 제외
+  `.state/credential-recovery-final/connection-password.txt`에 있다.
+  과거 .state/https-mcp/ 및 .state/credential-recovery/ 값을 사용하지 않는다.
+
 ## 변경 범위
 
 기존 두 MCP 도구와 RestAdapter를 재사용한다. create_server에 선택적인 인증
