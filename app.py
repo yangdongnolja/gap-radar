@@ -954,11 +954,11 @@ if filtered_df is not None:
     DISPLAY_COLS += [c for c in ["세대수", "준공연도", "건폐율(%)", "용적률(%)"] if c in filtered_df.columns]
 
 def naver_search_url(dong: str, name: str, gu: str = "") -> str:
-    """네이버 부동산의 검색어를 받는 검색 페이지로 연결한다."""
+    """신규 네이버 부동산의 검색어가 입력된 지도 검색 화면으로 연결한다."""
     clean_name = clean_apt_name(name)
     keyword = " ".join(part for part in (str(gu).strip(), str(dong).strip(), clean_name) if part)
     # display는 Streamlit 링크의 단지명 표시에만 사용한다.
-    return f"https://land.naver.com/search/search.naver?query={quote(keyword, safe='')}&display={clean_name}"
+    return f"https://fin.land.naver.com/search?q={quote(keyword, safe='')}&display={clean_name}"
 
 
 NAVER_LINK_CONFIG = {

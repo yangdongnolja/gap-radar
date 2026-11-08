@@ -1,5 +1,13 @@
 # GAP-RADAR 프로젝트 컨텍스트
 
+## 2026-11-08 신규 네이버 부동산 주소로 정정
+
+- 사용자 지정 fin.land.naver.com으로 링크 정정. app.py 공통 링크 함수만 /search?q=자치구+법정동+단지명 형식으로 변경했다.
+- 공개 사이트의 SEARCH_QUERY_KEY=q 및 실제 /search 요청이 /map?q=...&search-expanded=true로 이동함을 확인했다. 생성 링크로 HTTP200, 강서구 화곡동 대림e편한세상 검색어 입력과 검색창 확장 상태 확인.
+- Python 구문/Streamlit AppTest 리스트·요약·지도 팝업 링크 검사 통과. 실제 브라우저에서 검색 결과를 선택하는 단계는 미검증이다.
+- 앞선 사용자 승인 배포의 URL 정정으로 app.py와 관련 작업 기록만 master에 반영한다. 다른 앱·API·키는 유지한다.
+
+
 ## 2026-11-08 네이버 부동산 검색 링크 수정
 
 - app.py의 naver_search_url을 land.naver.com/search/search.naver?query=...로 변경해 자치구+법정동+정제 단지명으로 검색한다. 리스트/요약/지도 팝업에 동일 적용하고 요약도 자치구로 구분한다.
