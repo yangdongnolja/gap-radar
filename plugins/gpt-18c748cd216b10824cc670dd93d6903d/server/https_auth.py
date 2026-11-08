@@ -22,6 +22,7 @@ from mcp.shared.auth import OAuthClientInformationFull, OAuthToken
 from starlette.responses import HTMLResponse, RedirectResponse
 
 SCOPE = 'transactions:read'
+LOGIN_TTL = 15 * 60
 
 
 def password_hash(password: str, salt: str | None = None) -> str:
@@ -119,10 +120,12 @@ class OwnerOAuth:
             raise AuthorizeError('temporarily_unavailable', 'Please try again later')
         request_id = secrets.token_urlsafe(32)
         self.pending[request_id] = {'client': client, 'params': params,
-                                    'csrf': secrets.token_urlsafe(32), 'expires': time.time() + 300}
+                                    'csrf': secrets.token_urlsafe(32), 'expires': time.time() + LOGIN_TTL}
         return self.origin + '/login?' + urlencode({'request_id': request_id})
 
     async def login(self, request):
+        # Keep the expiry reason before pruning; never log request IDs or form data.
+        previous_pending = self.pending
         self._prune()
         form = await request.form() if request.method == 'POST' else None
         rid = str(form.get('request_id', '')) if form is not None else request.query_params.get('request_id', '')
@@ -131,7 +134,17 @@ class OwnerOAuth:
                    'Content-Security-Policy': "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'",
                    'X-Content-Type-Options': 'nosniff'}
         if not pending:
-            return HTMLResponse('연결 요청이 만료됐습니다. ChatGPT에서 다시 연결해주세요.', status_code=400, headers=headers)
+            if not rid:
+                reason = 'LOGIN_REQUEST_MISSING'
+                message = '로그인 요청 정보가 전달되지 않았습니다.'
+            elif rid in previous_pending:
+                reason = 'LOGIN_REQUEST_EXPIRED'
+                message = '연결 요청의 유효시간(15분)이 지났습니다.'
+            else:
+                reason = 'LOGIN_REQUEST_UNAVAILABLE'
+                message = '서버에 연결 요청이 없습니다. 서버 재시작 또는 이미 처리된 요청일 수 있습니다.'
+            return HTMLResponse(f'{message} ChatGPT에서 연결을 다시 시작해주세요. '
+                                f'오류 코드: {reason}', status_code=400, headers=headers)
         csrf = pending['csrf']
         if form is not None:
             if (not hmac.compare_digest(str(form.get('csrf', '')).encode(), csrf.encode())
@@ -166,7 +179,7 @@ class OwnerOAuth:
 <input type="hidden" name="csrf" value="{csrf}"><label>연결용 암호<input name="password" type="password" required maxlength="256" autocomplete="current-password"></label>
 <button type="submit">실거래 조회 연결 허용</button></form></html>'''
         result = HTMLResponse(page, headers=headers)
-        result.set_cookie('gr_login_csrf', csrf, max_age=300, path='/login', secure=True, httponly=True, samesite='lax')
+        result.set_cookie('gr_login_csrf', csrf, max_age=LOGIN_TTL, path='/login', secure=True, httponly=True, samesite='lax')
         return result
 
     async def load_authorization_code(self, client, authorization_code):

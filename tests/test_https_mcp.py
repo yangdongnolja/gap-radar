@@ -142,6 +142,23 @@ class HttpsMcpTests(unittest.TestCase):
         self.assertEqual(self.client.post('/mcp',headers={'Authorization':'Bearer invalid'},json={}).status_code,401)
         self.assertEqual(self.calls, [])
 
+    def test_login_missing_expired_lost_and_extended_window(self):
+        from unittest.mock import patch
+        reg = self.register().json()
+        fields = self.begin(reg)
+        self.assertIn('LOGIN_REQUEST_MISSING', self.client.post('/login', data={'password': PASSWORD}).text)
+        saved = self.provider.pending.pop(fields['request_id'])
+        self.assertIn('LOGIN_REQUEST_UNAVAILABLE', self.client.post('/login', data=fields).text)
+        self.provider.pending[fields['request_id']] = saved
+        saved['expires'] = time.time() - 1
+        self.assertIn('LOGIN_REQUEST_EXPIRED', self.client.post('/login', data=fields).text)
+        fields = self.begin(reg)
+        now = time.time()
+        with patch('https_auth.time.time', return_value=now + 360):
+            response = self.client.post('/login', data={**fields, 'password': PASSWORD}, follow_redirects=False)
+        self.assertEqual(response.status_code, 303)
+        self.assertNotIn(PASSWORD, response.text)
+
     def test_public_client_has_no_refresh_and_request_limits(self):
         reg = self.register(method='none').json()
         tokens = self.exchange(reg, self.login_code(reg)).json()
