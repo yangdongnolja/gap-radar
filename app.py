@@ -577,7 +577,7 @@ def build_popup_html(gu: str, dong: str, apt: str, addr: str, deals: pd.DataFram
     rows = [f"{area}㎡ 평균 <b>{_fmt_price(s.mean())}</b> ({len(s)}건)"
             for area, s in sorted(grp, key=lambda t: t[0])][:5]
 
-    naver_url = naver_search_url(dong, apt)
+    naver_url = naver_search_url(dong, apt, gu)
     divider = "<hr style='margin:4px 0;border:none;border-top:1px solid #ddd;'/>"
     return (
         "<div style='padding:8px 12px;font-size:12px;line-height:1.7;min-width:200px;max-width:250px;'>"
@@ -953,11 +953,12 @@ DISPLAY_COLS = ["계약일", "자치구", "법정동", "아파트명", "전용�
 if filtered_df is not None:
     DISPLAY_COLS += [c for c in ["세대수", "준공연도", "건폐율(%)", "용적률(%)"] if c in filtered_df.columns]
 
-def naver_search_url(dong: str, name: str) -> str:
-    """법정동과 정제된 단지명으로 네이버페이 부동산을 검색한다."""
+def naver_search_url(dong: str, name: str, gu: str = "") -> str:
+    """네이버 부동산의 검색어를 받는 검색 페이지로 연결한다."""
     clean_name = clean_apt_name(name)
-    keyword = f"{str(dong).strip()} {clean_name}".strip()
-    return f"https://new.land.naver.com/search?sk={quote(keyword)}&display={clean_name}"
+    keyword = " ".join(part for part in (str(gu).strip(), str(dong).strip(), clean_name) if part)
+    # display는 Streamlit 링크의 단지명 표시에만 사용한다.
+    return f"https://land.naver.com/search/search.naver?query={quote(keyword, safe='')}&display={clean_name}"
 
 
 NAVER_LINK_CONFIG = {
@@ -1007,7 +1008,7 @@ with tab1:
 
         page_df_view = page_df[DISPLAY_COLS].copy()
         page_df_view["아파트명"] = page_df_view.apply(
-            lambda row: naver_search_url(row["법정동"], row["아파트명"]), axis=1
+            lambda row: naver_search_url(row["법정동"], row["아파트명"], row["자치구"]), axis=1
         )
         st.dataframe(page_df_view, use_container_width=True, hide_index=True,
                      column_config={**NUM_COL_CONFIG, **NAVER_LINK_CONFIG})
@@ -1015,7 +1016,7 @@ with tab1:
 
         st.markdown("### 🏢 단지별 요약")
         summary_df = (
-            filtered_df.groupby(["법정동", "아파트명"])
+            filtered_df.groupby(["자치구", "법정동", "아파트명"])
             .agg(
                 거래건수=("거래금액(만원)", "count"),
                 평균가=("거래금액(만원)", "mean"),
@@ -1028,7 +1029,7 @@ with tab1:
         summary_df = summary_df.sort_values(by="거래건수", ascending=False)
         summary_df_view = summary_df.copy()
         summary_df_view["아파트명"] = summary_df_view.apply(
-            lambda row: naver_search_url(row["법정동"], row["아파트명"]), axis=1
+            lambda row: naver_search_url(row["법정동"], row["아파트명"], row["자치구"]), axis=1
         )
         st.dataframe(summary_df_view, use_container_width=True, hide_index=True,
                      column_config={**NUM_COL_CONFIG, **NAVER_LINK_CONFIG})

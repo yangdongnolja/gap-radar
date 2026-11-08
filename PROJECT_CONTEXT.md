@@ -1,5 +1,13 @@
 # GAP-RADAR 프로젝트 컨텍스트
 
+## 2026-11-08 네이버 부동산 검색 링크 수정
+
+- app.py의 naver_search_url을 land.naver.com/search/search.naver?query=...로 변경해 자치구+법정동+정제 단지명으로 검색한다. 리스트/요약/지도 팝업에 동일 적용하고 요약도 자치구로 구분한다.
+- 수정 전 new.land.naver.com/search?sk=...는 사용자 환경에서 첫 화면만 표시됐다. 새 생성 링크는 실제 HTTP200 및 중앙하이츠 단지명/매물 검색 결과를 확인했다.
+- Streamlit AppTest의 합성 거래/모의 좌표로 초기화·리스트·요약·팝업 링크·엑셀 통과. Python AST 구문 검사 통과.
+- 사용자 배포 승인으로 운영 master에 반영한다. Streamlit 외 API/MCP/환경변수/키는 변경하지 않는다. 모바일 및 네이버 실제 브라우저 클릭은 별도 확인 필요.
+
+
 ## 2026-10-27 Streamlit 공동주택 API 수정
 
 - app.py의 단지목록을 AptListService4/getSigunguAptList4, 기본정보를 AptBasisInfoServiceV5/getAphusBassInfoV5로 변경했다. 기존 주소는 실제 HTTP400/NO_OPENAPI_SERVICE_ERROR, 새 주소는 같은 키로 HTTP200을 확인했다.
