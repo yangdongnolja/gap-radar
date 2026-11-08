@@ -148,6 +148,7 @@ class HttpsMcpTests(unittest.TestCase):
         fields = self.begin(reg)
         self.assertIn('LOGIN_REQUEST_MISSING', self.client.post('/login', data={'password': PASSWORD}).text)
         saved = self.provider.pending.pop(fields['request_id'])
+        self.client.cookies.delete('gr_login_request')
         self.assertIn('LOGIN_REQUEST_UNAVAILABLE', self.client.post('/login', data=fields).text)
         self.provider.pending[fields['request_id']] = saved
         saved['expires'] = time.time() - 1
@@ -158,6 +159,49 @@ class HttpsMcpTests(unittest.TestCase):
             response = self.client.post('/login', data={**fields, 'password': PASSWORD}, follow_redirects=False)
         self.assertEqual(response.status_code, 303)
         self.assertNotIn(PASSWORD, response.text)
+
+    def test_login_survives_restart_and_keeps_oauth_bindings(self):
+        reg = self.register().json()
+        fields = self.begin(reg)
+        cookies = dict(self.client.cookies)
+        self.assertNotIn(PASSWORD, cookies['gr_login_request'])
+        self.assertNotIn(reg['client_secret'], cookies['gr_login_request'])
+        provider = OwnerOAuth(ORIGIN, KEY, OWNER_HASH)
+        with TestClient(create_app(provider, self.adapter), base_url=ORIGIN) as restarted:
+            restarted.cookies.update(cookies)
+            response = restarted.post('/login', data={**fields, 'password': PASSWORD}, follow_redirects=False)
+            self.assertEqual(response.status_code, 303)
+            self.assertIn("form-action 'self' https://chatgpt.com;", response.headers['content-security-policy'])
+            query = parse_qs(urlsplit(response.headers['location']).query)
+            self.assertEqual(query['state'], ['fixture-state'])
+            code = query['code'][0]
+            self.assertEqual(provider.codes[code].client_id, reg['client_id'])
+            # Even with the original cookies a second submission cannot approve again.
+            restarted.cookies.update(cookies)
+            replay = restarted.post('/login', data={**fields, 'password': PASSWORD}, follow_redirects=False)
+            self.assertEqual(replay.status_code, 400)
+            result = restarted.post('/token', data={'grant_type':'authorization_code',
+                'client_id':reg['client_id'], 'client_secret':reg['client_secret'], 'code':code,
+                'code_verifier':self.verifier, 'redirect_uri':CALLBACK, 'resource':ORIGIN+'/mcp'})
+            self.assertEqual(result.status_code, 200)
+
+    def test_recovery_cookie_cannot_bypass_csrf_password_or_request_binding(self):
+        from unittest.mock import patch
+        reg = self.register().json()
+        fields = self.begin(reg)
+        cookies = dict(self.client.cookies)
+        self.provider.pending.clear()
+        bad_fields = {**fields, 'request_id':'wrong-request', 'password':PASSWORD}
+        self.assertEqual(self.client.post('/login', data=bad_fields).status_code, 400)
+        self.client.cookies.set('gr_login_request', 'tampered', domain='mcp.example.test', path='/login')
+        self.assertEqual(self.client.post('/login', data={**fields,'password':PASSWORD}).status_code, 400)
+        self.client.cookies.clear()
+        self.client.cookies.update(cookies)
+        self.assertEqual(self.client.post('/login', data={**fields,'csrf':'wrong','password':PASSWORD}).status_code, 403)
+        self.assertEqual(self.client.post('/login', data={**fields,'password':'wrong'}).status_code, 401)
+        self.provider.pending.clear()
+        with patch('https_auth.time.time', return_value=time.time()+901):
+            self.assertEqual(self.client.post('/login', data={**fields,'password':PASSWORD}).status_code, 400)
 
     def test_public_client_has_no_refresh_and_request_limits(self):
         reg = self.register(method='none').json()

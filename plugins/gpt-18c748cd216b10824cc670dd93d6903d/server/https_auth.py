@@ -6,6 +6,7 @@ lived and single-use. No user database is introduced.
 """
 from __future__ import annotations
 
+import base64
 import hashlib
 import hmac
 import html
@@ -16,8 +17,9 @@ import time
 from urllib.parse import urlencode, urlsplit
 
 import jwt
+from cryptography.fernet import Fernet, InvalidToken
 from mcp.server.auth.provider import (AccessToken, AuthorizationCode,
-    AuthorizeError, RefreshToken, RegistrationError, TokenError)
+    AuthorizationParams, AuthorizeError, RefreshToken, RegistrationError, TokenError)
 from mcp.shared.auth import OAuthClientInformationFull, OAuthToken
 from starlette.responses import HTMLResponse, RedirectResponse
 
@@ -55,6 +57,10 @@ class OwnerOAuth:
         self.codes = {}
         self.revoked = {}
         self.attempts = []
+        self.completed = {}
+        # Separate purpose key; neither upstream credentials nor passwords enter cookies.
+        self.login_cipher = Fernet(base64.urlsafe_b64encode(hmac.new(
+            signing_key.encode(), ('login-cookie:' + self.origin).encode(), hashlib.sha256).digest()))
 
     def _prune(self):
         now = time.time()
@@ -62,6 +68,32 @@ class OwnerOAuth:
         self.codes = {k: v for k, v in self.codes.items() if v.expires_at > now}
         self.revoked = {k: v for k, v in self.revoked.items() if v > now}
         self.attempts = [t for t in self.attempts if t > now - 300]
+        self.completed = {k: v for k, v in self.completed.items() if v > now}
+
+    def _login_cookie(self, rid, pending):
+        payload = {'rid': rid, 'client_id': pending['client'].client_id,
+                   'params': pending['params'].model_dump(mode='json'),
+                   'csrf': pending['csrf'], 'expires': pending['expires']}
+        return self.login_cipher.encrypt(json.dumps(payload, separators=(',', ':')).encode()).decode()
+
+    async def _restore_login(self, rid, cookie):
+        if not rid or rid in self.completed or not cookie or len(cookie) > 3800:
+            return None
+        try:
+            data = json.loads(self.login_cipher.decrypt(cookie.encode(), ttl=LOGIN_TTL))
+            if (data['rid'] != rid or data['expires'] <= time.time()
+                    or data['expires'] > time.time() + LOGIN_TTL
+                    or not isinstance(data['csrf'], str)):
+                return None
+            params = AuthorizationParams.model_validate(data['params'])
+            client = await self.get_client(data['client_id'])
+            if (not client or params.resource != self.resource or set(params.scopes or []) != {SCOPE}
+                    or not valid_redirect(str(params.redirect_uri))
+                    or str(params.redirect_uri) not in [str(u) for u in client.redirect_uris]):
+                return None
+            return {'client': client, 'params': params, 'csrf': data['csrf'], 'expires': data['expires']}
+        except (InvalidToken, ValueError, TypeError, KeyError):
+            return None
 
     def _encode(self, kind, payload, ttl=None, audience=None):
         data = {'iss': self.issuer, 'aud': audience or self.resource, 'kind': kind,
@@ -130,8 +162,14 @@ class OwnerOAuth:
         form = await request.form() if request.method == 'POST' else None
         rid = str(form.get('request_id', '')) if form is not None else request.query_params.get('request_id', '')
         pending = self.pending.get(rid)
+        if pending is None and rid not in previous_pending:
+            pending = await self._restore_login(rid, request.cookies.get('gr_login_request', ''))
+            if pending is not None:
+                self.pending[rid] = pending
         headers = {'Cache-Control': 'no-store', 'Referrer-Policy': 'no-referrer',
-                   'Content-Security-Policy': "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'",
+                   # Some browsers apply form-action to the post-login redirect too.
+                   # Callback URLs are independently checked against valid_redirect.
+                   'Content-Security-Policy': "default-src 'none'; style-src 'unsafe-inline'; form-action 'self' https://chatgpt.com; frame-ancestors 'none'; base-uri 'none'",
                    'X-Content-Type-Options': 'nosniff'}
         if not pending:
             if not rid:
@@ -159,6 +197,7 @@ class OwnerOAuth:
                 return HTMLResponse('암호가 일치하지 않습니다. ChatGPT에서 연결을 다시 시작해주세요.', status_code=401, headers=headers)
             # No await between removal and creation: only one request can consume it.
             self.pending.pop(rid)
+            self.completed[rid] = pending['expires']
             params, client = pending['params'], pending['client']
             code = secrets.token_urlsafe(32)
             self.codes[code] = AuthorizationCode(code=code, client_id=client.client_id,
@@ -170,6 +209,7 @@ class OwnerOAuth:
                 query['state'] = params.state
             result = RedirectResponse(str(params.redirect_uri) + '?' + urlencode(query), status_code=303, headers=headers)
             result.delete_cookie('gr_login_csrf', path='/login', secure=True, httponly=True, samesite='lax')
+            result.delete_cookie('gr_login_request', path='/login', secure=True, httponly=True, samesite='lax')
             return result
         page = f'''<!doctype html><html lang="ko"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>GAP-RADAR 연결 승인</title><style>body{{font:18px sans-serif;max-width:440px;margin:60px auto;padding:20px}}input,button{{box-sizing:border-box;width:100%;padding:14px;margin-top:12px}}button{{background:#185adb;color:white;border:0;border-radius:8px}}</style>
@@ -179,7 +219,12 @@ class OwnerOAuth:
 <input type="hidden" name="csrf" value="{csrf}"><label>연결용 암호<input name="password" type="password" required maxlength="256" autocomplete="current-password"></label>
 <button type="submit">실거래 조회 연결 허용</button></form></html>'''
         result = HTMLResponse(page, headers=headers)
-        result.set_cookie('gr_login_csrf', csrf, max_age=LOGIN_TTL, path='/login', secure=True, httponly=True, samesite='lax')
+        recovery = self._login_cookie(rid, pending)
+        if len(recovery) > 3800:
+            return HTMLResponse('연결 요청이 너무 큽니다. 오류 코드: LOGIN_REQUEST_TOO_LARGE', status_code=400, headers=headers)
+        remaining = max(1, int(pending['expires'] - time.time()))
+        result.set_cookie('gr_login_csrf', csrf, max_age=remaining, path='/login', secure=True, httponly=True, samesite='lax')
+        result.set_cookie('gr_login_request', recovery, max_age=remaining, path='/login', secure=True, httponly=True, samesite='lax')
         return result
 
     async def load_authorization_code(self, client, authorization_code):
